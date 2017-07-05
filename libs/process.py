@@ -33,6 +33,7 @@ from __future__ import absolute_import
 # the provisions above, a recipient may use your version of this file under
 # the terms of any one of the MPL, the GPL or the LGPL.
 # 
+#
 # ***** END LICENSE BLOCK *****
 
 import os
@@ -46,6 +47,7 @@ import logging
 import threading
 import warnings
 
+py2 = (sys.version_info[0] == 2)
 if sys.version_info[0] == 3:
     string_types = str
 else:
@@ -93,13 +95,9 @@ if sys.platform == "win32" and sys.getwindowsversion()[3] == 2:
                                 STARTF_USESTDHANDLES, STARTF_USESHOWWINDOW,
                                 GetVersion, CreateProcess, TerminateProcess)
     except ImportError:
-        import subprocess
-        SW_HIDE = subprocess._subprocess.SW_HIDE
-        STARTF_USESTDHANDLES = subprocess._subprocess.STARTF_USESTDHANDLES
-        STARTF_USESHOWWINDOW = subprocess._subprocess.STARTF_USESHOWWINDOW
-        GetVersion = subprocess._subprocess.GetVersion
-        CreateProcess = subprocess._subprocess.CreateProcess
-        TerminateProcess = subprocess._subprocess.TerminateProcess
+        from _winapi import (SW_HIDE,
+        STARTF_USESTDHANDLES, STARTF_USESHOWWINDOW,
+        GetVersion, CreateProcess, TerminateProcess)
 
     # This fix is for killing child processes on windows, based on:
     #   http://www.microsoft.com/msj/0698/win320698.aspx
@@ -116,7 +114,37 @@ if sys.platform == "win32" and sys.getwindowsversion()[3] == 2:
 
         _job = None
 
-        def _execute_child(self, args, executable, preexec_fn, close_fds,
+        if py2:
+            def _execute_child(self, args, executable, preexec_fn, close_fds,
+                           cwd, env, universal_newlines,
+                           startupinfo, creationflags, shell,
+                           p2cread, p2cwrite,
+                           c2pread, c2pwrite,
+                           errread, errwrite):
+                return self._execute_child_compat(args, executable, preexec_fn, close_fds,
+                           cwd, env, universal_newlines,
+                           startupinfo, creationflags, shell,
+                           p2cread, p2cwrite,
+                           c2pread, c2pwrite,
+                           errread, errwrite)
+        else:
+            def _execute_child(self, args, executable, preexec_fn, close_fds,
+                               pass_fds,
+                               cwd, env,
+                               startupinfo,
+                               creationflags, shell,
+                               p2cread, p2cwrite,
+                               c2pread, c2pwrite,
+                               errread, errwrite,
+                               unused_restore_signals, unused_start_new_session):
+                return self._execute_child_compat(args, executable, preexec_fn, close_fds,
+                           cwd, env, True, startupinfo,
+                           creationflags, shell,
+                           p2cread, p2cwrite,
+                           c2pread, c2pwrite,
+                           errread, errwrite)
+
+        def _execute_child_compat(self, args, executable, preexec_fn, close_fds,
                            cwd, env, universal_newlines,
                            startupinfo, creationflags, shell,
                            p2cread, p2cwrite,
@@ -194,8 +222,8 @@ if sys.platform == "win32" and sys.getwindowsversion()[3] == 2:
             if self._job:
                 # Resume the thread.
                 winprocess.AssignProcessToJobObject(self._job, int(hp))
-                winprocess.ResumeThread(int(ht))
-            ht.Close()
+                winprocess.ResumeThread(ht)
+            winprocess.CloseHandle(ht)
     
             # Child is launched. Close the parent's copy of those pipe
             # handles that only the child should have open.  You need
@@ -367,7 +395,10 @@ class ProcessOpen(Popen):
             if sys.platform != "win32":
                 cls.__needToHackAroundStdHandles = False
             else:
-                from _subprocess import GetStdHandle, STD_INPUT_HANDLE
+                try:
+                    from _subprocess import GetStdHandle, STD_INPUT_HANDLE
+                except ImportError:
+                    from _winapi import GetStdHandle, STD_INPUT_HANDLE
                 stdin_handle = GetStdHandle(STD_INPUT_HANDLE)
                 if stdin_handle is not None:
                     cls.__needToHackAroundStdHandles = True
@@ -386,7 +417,10 @@ class ProcessOpen(Popen):
         @param fileobj The object being used as a fd/handle/whatever
         @param stream_name The name of the stream, "stdin", "stdout", or "stderr"
         """
-        import _subprocess
+        try:
+            from _subprocess import STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLER, GetStdHandle
+        except ImportError:
+            from _winapi import STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLER, GetStdHandle
         import ctypes
         import msvcrt
         new_handle = None
@@ -401,11 +435,11 @@ class ProcessOpen(Popen):
         try:
             if fileobj is None:
                 std_handle = {
-                    "stdin": _subprocess.STD_INPUT_HANDLE,
-                    "stdout": _subprocess.STD_OUTPUT_HANDLE,
-                    "stderr": _subprocess.STD_ERROR_HANDLE,
+                    "stdin": STD_INPUT_HANDLE,
+                    "stdout": STD_OUTPUT_HANDLE,
+                    "stderr": STD_ERROR_HANDLE,
                 }[stream_name]
-                handle = _subprocess.GetStdHandle(std_handle)
+                handle = GetStdHandle(std_handle)
                 if handle is None:
                     # subprocess.Popen._get_handles creates a new pipe here
                     # we don't have to worry about things we create
